@@ -360,7 +360,7 @@ class ETAInvoiceExporter {
       return;
     }
     
-    const percentage = progress.totalPages > 0 ? (progress.currentPage / progress.totalPages) * 100 : 0;
+    const percentage = progress.percentage || (progress.totalPages > 0 ? (progress.currentPage / progress.totalPages) * 100 : 0);
     
     const progressFill = this.elements.progressBar.querySelector('.progress-fill');
     if (progressFill) {
@@ -368,7 +368,7 @@ class ETAInvoiceExporter {
     }
     
     if (this.elements.progressText) {
-      this.elements.progressText.textContent = progress.message || `الصفحة ${progress.currentPage} من ${progress.totalPages}`;
+      this.elements.progressText.textContent = progress.message || `الصفحة ${progress.currentPage} من ${progress.totalPages} (${Math.round(percentage)}%)`;
     }
   }
   

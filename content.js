@@ -376,12 +376,15 @@ class ETAContentScript {
       this.isProcessingAllPages = true;
       this.allPagesData = [];
       
-      // First, scan current page to get pagination info
+      // أولاً، فحص الصفحة الحالية للحصول على معلومات التصفح
       this.scanForInvoices();
       
+      console.log(`ETA Exporter: بدء تحميل جميع الصفحات. الصفحة الحالية: ${this.currentPage}, إجمالي الصفحات: ${this.totalPages}`);
+      
       if (this.totalPages <= 1) {
-        // Only one page, return current data
+        // صفحة واحدة فقط، إرجاع البيانات الحالية
         this.allPagesData = [...this.invoiceData];
+        console.log(`ETA Exporter: صفحة واحدة فقط، تم جمع ${this.allPagesData.length} فاتورة`);
         return {
           success: true,
           data: this.allPagesData,
@@ -389,62 +392,76 @@ class ETAContentScript {
         };
       }
       
-      // Add current page data first
-      this.allPagesData.push(...this.invoiceData);
-      console.log(`ETA Exporter: Added current page ${this.currentPage} data: ${this.invoiceData.length} invoices`);
+      // إضافة بيانات الصفحة الحالية أولاً
+      if (this.invoiceData.length > 0) {
+        this.allPagesData.push(...this.invoiceData);
+        console.log(`ETA Exporter: تم إضافة بيانات الصفحة الحالية ${this.currentPage}: ${this.invoiceData.length} فاتورة`);
+      }
       
-      // Process remaining pages
+      // معالجة الصفحات المتبقية
       for (let page = 1; page <= this.totalPages; page++) {
-        // Skip current page as we already have its data
+        // تخطي الصفحة الحالية لأن لدينا بياناتها بالفعل
         if (page === this.currentPage) {
+          console.log(`ETA Exporter: تخطي الصفحة الحالية ${page}`);
           continue;
         }
         
         try {
-          // Update progress
+          // تحديث التقدم
           if (this.progressCallback) {
             this.progressCallback({
               currentPage: page,
               totalPages: this.totalPages,
-              message: `جاري الانتقال للصفحة ${page} من ${this.totalPages}...`
+              message: `جاري الانتقال للصفحة ${page} من ${this.totalPages}...`,
+              percentage: ((page - 1) / this.totalPages) * 100
             });
           }
           
-          // Navigate to the page
+          console.log(`ETA Exporter: محاولة الانتقال للصفحة ${page}`);
+          
+          // الانتقال للصفحة
           const navigated = await this.navigateToPage(page);
           if (!navigated) {
-            console.warn(`Failed to navigate to page ${page}`);
+            console.warn(`ETA Exporter: فشل في الانتقال للصفحة ${page}`);
             continue;
           }
           
-          // Wait for page to load
-          await this.waitForPageLoadOptimized();
+          console.log(`ETA Exporter: تم الانتقال بنجاح للصفحة ${page}`);
           
-          // Update progress
+          // انتظار تحميل الصفحة
+          await this.waitForPageLoadOptimized(page);
+          
+          // تحديث التقدم
           if (this.progressCallback) {
             this.progressCallback({
               currentPage: page,
               totalPages: this.totalPages,
-              message: `جاري استخراج بيانات الصفحة ${page}...`
+              message: `جاري استخراج بيانات الصفحة ${page}...`,
+              percentage: (page / this.totalPages) * 100
             });
           }
           
-          // Scan for invoices on this page
+          // فحص الفواتير في هذه الصفحة
           this.scanForInvoices();
           
-          // Add current page data to all pages data
-          this.allPagesData.push(...this.invoiceData);
+          // إضافة بيانات الصفحة الحالية لجميع بيانات الصفحات
+          if (this.invoiceData.length > 0) {
+            this.allPagesData.push(...this.invoiceData);
+            console.log(`ETA Exporter: تم معالجة الصفحة ${page}، تم جمع ${this.invoiceData.length} فاتورة`);
+          } else {
+            console.warn(`ETA Exporter: لم يتم العثور على فواتير في الصفحة ${page}`);
+          }
           
-          console.log(`ETA Exporter: Processed page ${page}, collected ${this.invoiceData.length} invoices`);
-          
-          // Small delay before next page
-          await this.delay(500);
+          // تأخير صغير قبل الصفحة التالية
+          await this.delay(800);
           
         } catch (error) {
-          console.error(`Error processing page ${page}:`, error);
-          // Continue with next page even if current page fails
+          console.error(`ETA Exporter: خطأ في معالجة الصفحة ${page}:`, error);
+          // المتابعة مع الصفحة التالية حتى لو فشلت الصفحة الحالية
         }
       }
+      
+      console.log(`ETA Exporter: انتهاء تحميل جميع الصفحات. إجمالي الفواتير المجمعة: ${this.allPagesData.length}`);
       
       return {
         success: true,
@@ -453,7 +470,7 @@ class ETAContentScript {
       };
       
     } catch (error) {
-      console.error('Error getting all pages data:', error);
+      console.error('ETA Exporter: خطأ في الحصول على بيانات جميع الصفحات:', error);
       return { 
         success: false, 
         data: this.allPagesData,
@@ -466,112 +483,188 @@ class ETAContentScript {
   
   async navigateToPage(pageNumber) {
     try {
-      // If we're already on the target page, no need to navigate
+      // إذا كنا بالفعل في الصفحة المطلوبة، فلا حاجة للتنقل
       if (this.currentPage === pageNumber) {
+        console.log(`ETA Exporter: نحن بالفعل في الصفحة ${pageNumber}`);
         return true;
       }
       
-      // Look for page number button using exact selector from HTML
-      const pageButtons = document.querySelectorAll('.eta-pageNumber');
+      console.log(`ETA Exporter: البحث عن زر الصفحة ${pageNumber}`);
       
-      // Find the specific page button
+      // البحث عن زر رقم الصفحة باستخدام محددات متعددة
+      const pageSelectors = [
+        '.eta-pageNumber',
+        '[class*="pageNumber"]',
+        '[class*="page-number"]',
+        '.ms-Button[aria-label*="Page"]',
+        'button[aria-label*="صفحة"]'
+      ];
+      
+      let pageButtons = [];
+      for (const selector of pageSelectors) {
+        pageButtons = document.querySelectorAll(selector);
+        if (pageButtons.length > 0) {
+          console.log(`ETA Exporter: تم العثور على ${pageButtons.length} أزرار صفحات باستخدام المحدد: ${selector}`);
+          break;
+        }
+      }
+      
+      // البحث عن زر الصفحة المحدد
       for (const btn of pageButtons) {
-        const label = btn.querySelector('.ms-Button-label');
-        if (label && parseInt(label.textContent) === pageNumber) {
-          console.log(`Navigating to page ${pageNumber}`);
+        const label = btn.querySelector('.ms-Button-label, .ms-Button-textContainer, [class*="label"]');
+        const buttonText = label ? label.textContent : btn.textContent;
+        
+        if (buttonText && parseInt(buttonText.trim()) === pageNumber) {
+          console.log(`ETA Exporter: تم العثور على زر الصفحة ${pageNumber}, النقر عليه`);
           btn.click();
-          await this.waitForPageLoadOptimized();
+          await this.delay(1000); // انتظار قصير للسماح بالنقر
           
-          // Verify we're on the correct page
+          // التحقق من أننا في الصفحة الصحيحة
+          await this.waitForPageLoadOptimized(pageNumber);
           this.extractPaginationInfo();
+          
           if (this.currentPage === pageNumber) {
-            console.log(`Successfully navigated to page ${pageNumber}`);
+            console.log(`ETA Exporter: تم الانتقال بنجاح للصفحة ${pageNumber}`);
             return true;
+          } else {
+            console.warn(`ETA Exporter: فشل في التحقق من الانتقال للصفحة ${pageNumber}. الصفحة الحالية: ${this.currentPage}`);
           }
         }
       }
       
-      // Try alternative navigation method using next/previous buttons
+      console.log(`ETA Exporter: لم يتم العثور على زر مباشر للصفحة ${pageNumber}, محاولة التنقل التدريجي`);
+      
+      // محاولة طريقة التنقل البديلة باستخدام أزرار التالي/السابق
       if (pageNumber > this.currentPage) {
-        // Navigate forward
+        // التنقل للأمام
         for (let i = this.currentPage; i < pageNumber; i++) {
+          console.log(`ETA Exporter: الانتقال للأمام من الصفحة ${i} إلى ${i + 1}`);
           const success = await this.navigateToNextPage();
-          if (!success) break;
-          await this.waitForPageLoadOptimized();
+          if (!success) {
+            console.warn(`ETA Exporter: فشل في الانتقال للصفحة التالية من ${i}`);
+            break;
+          }
+          await this.waitForPageLoadOptimized(i + 1);
           this.extractPaginationInfo();
+          console.log(`ETA Exporter: الصفحة الحالية بعد التنقل: ${this.currentPage}`);
         }
       } else if (pageNumber < this.currentPage) {
-        // Navigate backward
+        // التنقل للخلف
         for (let i = this.currentPage; i > pageNumber; i--) {
+          console.log(`ETA Exporter: الانتقال للخلف من الصفحة ${i} إلى ${i - 1}`);
           const success = await this.navigateToPreviousPage();
-          if (!success) break;
-          await this.waitForPageLoadOptimized();
+          if (!success) {
+            console.warn(`ETA Exporter: فشل في الانتقال للصفحة السابقة من ${i}`);
+            break;
+          }
+          await this.waitForPageLoadOptimized(i - 1);
           this.extractPaginationInfo();
+          console.log(`ETA Exporter: الصفحة الحالية بعد التنقل: ${this.currentPage}`);
         }
       }
       
-      return this.currentPage === pageNumber;
+      const success = this.currentPage === pageNumber;
+      console.log(`ETA Exporter: نتيجة التنقل للصفحة ${pageNumber}: ${success ? 'نجح' : 'فشل'}`);
+      return success;
     } catch (error) {
-      console.error(`Error navigating to page ${pageNumber}:`, error);
+      console.error(`ETA Exporter: خطأ في الانتقال للصفحة ${pageNumber}:`, error);
       return false;
     }
   }
   
   async navigateToPreviousPage() {
     try {
-      // Look for previous page button
-      const prevButton = document.querySelector('[data-icon-name="ChevronLeft"]')?.closest('button');
+      // البحث عن زر الصفحة السابقة
+      const prevSelectors = [
+        '[data-icon-name="ChevronLeft"]',
+        '[data-icon-name="Previous"]',
+        '[aria-label*="Previous"]',
+        '[aria-label*="السابق"]',
+        '.ms-Button[title*="Previous"]',
+        '.ms-Button[title*="السابق"]'
+      ];
       
-      if (prevButton && !prevButton.disabled && !prevButton.classList.contains('is-disabled')) {
-        prevButton.click();
-        return true;
+      for (const selector of prevSelectors) {
+        const prevButton = document.querySelector(selector)?.closest('button');
+        if (prevButton && !prevButton.disabled && !prevButton.classList.contains('is-disabled')) {
+          console.log(`ETA Exporter: النقر على زر الصفحة السابقة`);
+          prevButton.click();
+          await this.delay(500);
+          return true;
+        }
       }
       
+      console.warn(`ETA Exporter: لم يتم العثور على زر الصفحة السابقة`);
       return false;
     } catch (error) {
-      console.error('Error navigating to previous page:', error);
+      console.error('ETA Exporter: خطأ في الانتقال للصفحة السابقة:', error);
       return false;
     }
   }
   
   async navigateToNextPage() {
     try {
-      // Look for next page button using exact selector from HTML
-      const nextButton = document.querySelector('[data-icon-name="ChevronRight"]')?.closest('button');
+      // البحث عن زر الصفحة التالية
+      const nextSelectors = [
+        '[data-icon-name="ChevronRight"]',
+        '[data-icon-name="Next"]',
+        '[aria-label*="Next"]',
+        '[aria-label*="التالي"]',
+        '.ms-Button[title*="Next"]',
+        '.ms-Button[title*="التالي"]'
+      ];
       
-      if (nextButton && !nextButton.disabled && !nextButton.classList.contains('is-disabled')) {
-        nextButton.click();
-        return true;
+      for (const selector of nextSelectors) {
+        const nextButton = document.querySelector(selector)?.closest('button');
+        if (nextButton && !nextButton.disabled && !nextButton.classList.contains('is-disabled')) {
+          console.log(`ETA Exporter: النقر على زر الصفحة التالية`);
+          nextButton.click();
+          await this.delay(500);
+          return true;
+        }
       }
       
+      console.warn(`ETA Exporter: لم يتم العثور على زر الصفحة التالية`);
       return false;
     } catch (error) {
-      console.error('Error navigating to next page:', error);
+      console.error('ETA Exporter: خطأ في الانتقال للصفحة التالية:', error);
       return false;
     }
   }
   
-  async waitForPageLoadOptimized() {
-    // Optimized page load waiting using DOM readiness checks
+  async waitForPageLoadOptimized(expectedPage = null) {
+    // انتظار تحميل الصفحة المحسن باستخدام فحوصات جاهزية DOM
     
-    // 1. Wait for loading indicators to disappear
+    console.log(`ETA Exporter: انتظار تحميل الصفحة${expectedPage ? ` ${expectedPage}` : ''}...`);
+    
+    // 1. انتظار اختفاء مؤشرات التحميل
     await this.waitForCondition(() => {
-      const loadingIndicators = document.querySelectorAll('.LoadingIndicator, .ms-Spinner, [class*="loading"], [class*="spinner"]');
+      const loadingIndicators = document.querySelectorAll('.LoadingIndicator, .ms-Spinner, [class*="loading"], [class*="spinner"], [class*="Loading"]');
       return loadingIndicators.length === 0 || 
              Array.from(loadingIndicators).every(el => el.style.display === 'none' || !el.offsetParent);
-    }, 8000);
+    }, 10000);
     
-    // 2. Wait for invoice rows to appear and be stable
+    // 2. انتظار ظهور صفوف الفواتير واستقرارها
     await this.waitForCondition(() => {
       const rows = this.getVisibleInvoiceRows();
       return rows.length > 0;
-    }, 8000);
+    }, 10000);
     
-    // 3. Wait for DOM to stabilize (no new rows being added)
+    // 3. إذا كان لدينا رقم صفحة متوقع، تحقق من أننا في الصفحة الصحيحة
+    if (expectedPage) {
+      await this.waitForCondition(() => {
+        this.extractPaginationInfo();
+        return this.currentPage === expectedPage;
+      }, 5000);
+    }
+    
+    // 4. انتظار استقرار DOM (عدم إضافة صفوف جديدة)
     await this.waitForDOMStability(500, 3);
     
-    // 4. Additional small wait to ensure all data is loaded
-    await this.delay(300);
+    // 5. انتظار إضافي صغير لضمان تحميل جميع البيانات
+    await this.delay(500);
+    
+    console.log(`ETA Exporter: انتهاء انتظار تحميل الصفحة`);
   }
   
   async waitForDOMStability(checkInterval = 500, requiredStableChecks = 3) {
