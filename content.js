@@ -533,16 +533,6 @@ class ETAContentScript {
       return false;
     }
   }
-          return true;
-        }
-      }
-      
-      return false;
-    } catch (error) {
-      console.error(`Error navigating to page ${pageNumber}:`, error);
-      return false;
-    }
-  }
   
   async navigateToNextPage() {
     try {
