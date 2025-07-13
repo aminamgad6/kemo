@@ -1,4 +1,4 @@
-// Content script for ETA Invoice Exporter with exact data extraction matching the portal structure
+// Content script for ETA Invoice Exporter with improved performance and accurate data extraction
 class ETAContentScript {
   constructor() {
     this.invoiceData = [];
@@ -8,6 +8,7 @@ class ETAContentScript {
     this.totalPages = 1;
     this.isProcessingAllPages = false;
     this.progressCallback = null;
+    this.domObserver = null;
     this.init();
   }
   
@@ -42,7 +43,7 @@ class ETAContentScript {
       
       if (shouldRescan && !this.isProcessingAllPages) {
         clearTimeout(this.rescanTimeout);
-        this.rescanTimeout = setTimeout(() => this.scanForInvoices(), 1000);
+        this.rescanTimeout = setTimeout(() => this.scanForInvoices(), 500);
       }
     });
     
@@ -59,9 +60,9 @@ class ETAContentScript {
       // Extract pagination info first
       this.extractPaginationInfo();
       
-      // Find invoice rows using the exact selectors from the HTML
-      const rows = document.querySelectorAll('.ms-DetailsRow[role="row"]');
-      console.log(`ETA Exporter: Found ${rows.length} invoice rows on page ${this.currentPage}`);
+      // Find invoice rows using improved selectors - only visible, actual invoice rows
+      const rows = this.getVisibleInvoiceRows();
+      console.log(`ETA Exporter: Found ${rows.length} visible invoice rows on page ${this.currentPage}`);
       
       rows.forEach((row, index) => {
         const invoiceData = this.extractDataFromRow(row, index + 1);
@@ -77,31 +78,74 @@ class ETAContentScript {
     }
   }
   
+  getVisibleInvoiceRows() {
+    // Get all potential invoice rows
+    const allRows = document.querySelectorAll('.ms-DetailsRow[role="row"]');
+    const visibleRows = [];
+    
+    allRows.forEach(row => {
+      // Check if row is visible and contains actual invoice data
+      if (this.isRowVisible(row) && this.hasInvoiceData(row)) {
+        visibleRows.push(row);
+      }
+    });
+    
+    return visibleRows;
+  }
+  
+  isRowVisible(row) {
+    // Check if the row is actually visible in the DOM
+    const rect = row.getBoundingClientRect();
+    const style = window.getComputedStyle(row);
+    
+    return (
+      rect.width > 0 && 
+      rect.height > 0 &&
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.opacity !== '0'
+    );
+  }
+  
+  hasInvoiceData(row) {
+    // Check if row contains actual invoice data (not header or empty row)
+    const cells = row.querySelectorAll('.ms-DetailsRow-cell');
+    if (cells.length === 0) return false;
+    
+    // Look for electronic number or internal number in the first cell
+    const firstCell = cells[0];
+    const electronicLink = firstCell?.querySelector('.internalId-link a.griCellTitle');
+    const internalNumber = firstCell?.querySelector('.griCellSubTitle');
+    
+    return !!(electronicLink?.textContent?.trim() || internalNumber?.textContent?.trim());
+  }
+  
   extractPaginationInfo() {
     try {
-      // Extract total count from pagination - exact selector from HTML
-      const totalLabel = document.querySelector('.eta-pagination-totalrecordCount-label');
+      // Extract total count from pagination - improved selector
+      const totalLabel = document.querySelector('.eta-pagination-totalrecordCount-label, [class*="pagination"] [class*="total"], [class*="record"] [class*="count"]');
       if (totalLabel) {
-        const match = totalLabel.textContent.match(/النتائج:\s*(\d+)/);
+        const match = totalLabel.textContent.match(/النتائج:\s*(\d+)|(\d+)\s*نتيجة|Total:\s*(\d+)/);
         if (match) {
-          this.totalCount = parseInt(match[1]);
+          this.totalCount = parseInt(match[1] || match[2] || match[3]);
         }
       }
       
-      // Extract current page - exact selector from HTML
-      const currentPageBtn = document.querySelector('.eta-pageNumber.is-checked');
+      // Extract current page - improved selector
+      const currentPageBtn = document.querySelector('.eta-pageNumber.is-checked, [class*="page"][class*="current"], [class*="active"][class*="page"]');
       if (currentPageBtn) {
-        const pageLabel = currentPageBtn.querySelector('.ms-Button-label');
+        const pageLabel = currentPageBtn.querySelector('.ms-Button-label, [class*="label"], [class*="text"]');
         if (pageLabel) {
           this.currentPage = parseInt(pageLabel.textContent) || 1;
         }
       }
       
-      // Calculate total pages (10 items per page based on the HTML structure)
-      const itemsPerPage = 10;
+      // Calculate total pages based on actual visible rows per page
+      const visibleRows = this.getVisibleInvoiceRows();
+      const itemsPerPage = Math.max(visibleRows.length, 10); // Default to 10 if no rows found
       this.totalPages = Math.ceil(this.totalCount / itemsPerPage);
       
-      console.log(`ETA Exporter: Page ${this.currentPage} of ${this.totalPages}, Total: ${this.totalCount} invoices`);
+      console.log(`ETA Exporter: Page ${this.currentPage} of ${this.totalPages}, Total: ${this.totalCount} invoices, Current page: ${visibleRows.length} rows`);
       
     } catch (error) {
       console.warn('ETA Exporter: Error extracting pagination info:', error);
@@ -144,7 +188,10 @@ class ETAContentScript {
       salesOrderRef: '',
       electronicSignature: 'موقع إلكترونياً',
       foodDrugGuide: '',
-      externalLink: ''
+      externalLink: '',
+      
+      // Add details property for line items
+      details: []
     };
     
     try {
@@ -344,7 +391,7 @@ class ETAContentScript {
       // Start from page 1
       await this.navigateToPage(1);
       
-      // Process all pages
+      // Process all pages with improved performance
       for (let page = 1; page <= this.totalPages; page++) {
         try {
           // Update progress
@@ -356,8 +403,8 @@ class ETAContentScript {
             });
           }
           
-          // Wait for page to load and scan
-          await this.waitForPageLoad();
+          // Wait for page to load using DOM readiness checks
+          await this.waitForPageLoadOptimized();
           this.scanForInvoices();
           
           // Add current page data to all pages data
@@ -368,7 +415,7 @@ class ETAContentScript {
           // Navigate to next page if not the last page
           if (page < this.totalPages) {
             await this.navigateToNextPage();
-            await this.delay(1500); // Wait between page transitions
+            await this.delay(800); // Reduced wait time
           }
           
         } catch (error) {
@@ -405,7 +452,7 @@ class ETAContentScript {
         const label = btn.querySelector('.ms-Button-label');
         if (label && parseInt(label.textContent) === pageNumber) {
           btn.click();
-          await this.waitForPageLoad();
+          await this.waitForPageLoadOptimized();
           return true;
         }
       }
@@ -434,22 +481,45 @@ class ETAContentScript {
     }
   }
   
-  async waitForPageLoad() {
-    // Wait for loading indicators to disappear
+  async waitForPageLoadOptimized() {
+    // Optimized page load waiting using DOM readiness checks
+    
+    // 1. Wait for loading indicators to disappear
     await this.waitForCondition(() => {
-      const loadingIndicators = document.querySelectorAll('.LoadingIndicator, .ms-Spinner');
+      const loadingIndicators = document.querySelectorAll('.LoadingIndicator, .ms-Spinner, [class*="loading"], [class*="spinner"]');
       return loadingIndicators.length === 0 || 
              Array.from(loadingIndicators).every(el => el.style.display === 'none' || !el.offsetParent);
-    }, 10000);
+    }, 8000);
     
-    // Wait for invoice rows to appear
+    // 2. Wait for invoice rows to appear and be stable
     await this.waitForCondition(() => {
-      const rows = document.querySelectorAll('.ms-DetailsRow[role="row"]');
+      const rows = this.getVisibleInvoiceRows();
       return rows.length > 0;
-    }, 10000);
+    }, 8000);
     
-    // Additional wait to ensure data is fully loaded
-    await this.delay(1000);
+    // 3. Wait for DOM to stabilize (no new rows being added)
+    await this.waitForDOMStability(500, 3);
+    
+    // 4. Additional small wait to ensure all data is loaded
+    await this.delay(300);
+  }
+  
+  async waitForDOMStability(checkInterval = 500, requiredStableChecks = 3) {
+    let stableChecks = 0;
+    let lastRowCount = 0;
+    
+    while (stableChecks < requiredStableChecks) {
+      const currentRowCount = this.getVisibleInvoiceRows().length;
+      
+      if (currentRowCount === lastRowCount && currentRowCount > 0) {
+        stableChecks++;
+      } else {
+        stableChecks = 0;
+      }
+      
+      lastRowCount = currentRowCount;
+      await this.delay(checkInterval);
+    }
   }
   
   async waitForCondition(condition, timeout = 5000) {
@@ -476,7 +546,6 @@ class ETAContentScript {
   async getInvoiceDetails(invoiceId) {
     try {
       // Extract invoice details from the details view
-      // This would be called when user clicks on an invoice link
       const details = await this.extractInvoiceDetailsFromPage(invoiceId);
       
       return {
@@ -495,9 +564,6 @@ class ETAContentScript {
   
   async extractInvoiceDetailsFromPage(invoiceId) {
     // This method extracts line items from the invoice details page
-    // Based on the second image showing the detailed view with columns:
-    // كود الصنف, إسم الكود, الوصف, الكمية, كود الوحدة, إسم الوحدة, السعر, القيمة, ضريبة القيمة المضافة, الإجمالي
-    
     const details = [];
     
     try {
