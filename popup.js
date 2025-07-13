@@ -538,21 +538,21 @@ class ETAInvoiceExporter {
       // Create detail sheet for each invoice
       const sheetName = `تفاصيل_${index + 1}`;
       
-      // Headers for invoice details (based on typical invoice line items)
+      // Headers for invoice details matching the screenshot layout (right to left)
       const detailHeaders = [
-        'كود الصنف',           // Item code
-        'اسم الصنف',           // Item name
-        'الوصف',              // Description
-        'الكمية',             // Quantity
-        'الوحدة',             // Unit
-        'السعر',              // Unit price
-        'القيمة',             // Value
-        'ضريبة ق.م',          // VAT
-        'الإجمالي'            // Total
+        'اسم الصنف',                    // A - Item name (rightmost)
+        'كود الوحدة',                  // B - Unit code  
+        'اسم الوحدة',                  // C - Unit name
+        'الكمية',                     // D - Quantity
+        'السعر',                      // E - Price
+        'القيمة',                     // F - Value
+        'الضريبة',                    // G - Tax
+        'ضريبة القيمة المضافة',        // H - VAT
+        'الإجمالي'                    // I - Total (leftmost)
       ];
       
       const detailRows = [
-        // Invoice header information
+        // Invoice header information (9 columns to match headers)
         ['معلومات الفاتورة', '', '', '', '', '', '', '', ''],
         ['الرقم الإلكتروني:', invoice.electronicNumber || '', '', '', '', '', '', '', ''],
         ['الرقم الداخلي:', invoice.internalNumber || '', '', '', '', '', '', '', ''],
@@ -567,27 +567,28 @@ class ETAInvoiceExporter {
       if (invoice.details && invoice.details.length > 0) {
         invoice.details.forEach(item => {
           detailRows.push([
-            item.itemCode || '',
-            item.codeName || item.description || '',
-            item.description || '',
+            item.description || item.codeName || '',           // A - اسم الصنف
+            item.unitCode || 'EA',                            // B - كود الوحدة
+            item.unitName || 'قطعة',                          // C - اسم الوحدة
             item.quantity || '1',
             item.unitName || 'قطعة',
             this.formatCurrency(item.unitPrice),
             this.formatCurrency(item.totalValue),
+            this.formatCurrency(item.taxAmount || '0'),       // G - الضريبة
             this.formatCurrency(item.vatAmount),
-            this.formatCurrency(item.totalWithVat)
+            this.formatCurrency(item.totalWithVat)            // I - الإجمالي
           ]);
         });
       } else {
         // Add summary row if no detailed items
         detailRows.push([
-          'SUMMARY',
-          'إجمالي الفاتورة',
           'إجمالي قيمة الفاتورة',
-          '1',
+          'EA',
           'فاتورة',
+          '1',
           this.formatCurrency(invoice.totalAmount),
           this.formatCurrency(invoice.invoiceValue || invoice.totalAmount),
+          '0',
           this.formatCurrency(invoice.vatAmount),
           this.formatCurrency(invoice.totalAmount)
         ]);
@@ -597,10 +598,12 @@ class ETAInvoiceExporter {
       const totalValue = invoice.invoiceValue || invoice.totalAmount || '0';
       const totalVat = invoice.vatAmount || '0';
       const grandTotal = invoice.totalAmount || '0';
+      const totalTax = '0'; // Default tax amount
       
       detailRows.push([
-        '', '', '', '', '', 'الإجمالي:', 
+        '', '', '', '', 'الإجمالي:', 
         this.formatCurrency(totalValue),
+        this.formatCurrency(totalTax),
         this.formatCurrency(totalVat),
         this.formatCurrency(grandTotal)
       ]);
@@ -710,14 +713,14 @@ class ETAInvoiceExporter {
   formatDetailsWorksheet(ws, headers) {
     // Set column widths for details sheet
     const colWidths = [
-      { wch: 15 }, // كود الصنف
-      { wch: 25 }, // اسم الصنف
-      { wch: 30 }, // الوصف
+      { wch: 35 }, // A - اسم الصنف (widest column)
+      { wch: 12 }, // B - كود الوحدة
+      { wch: 15 }, // C - اسم الوحدة
       { wch: 10 }, // الكمية
-      { wch: 12 }, // الوحدة
       { wch: 12 }, // السعر
       { wch: 12 }, // القيمة
-      { wch: 12 }, // ضريبة ق.م
+      { wch: 12 }, // الضريبة
+      { wch: 15 }, // ضريبة القيمة المضافة
       { wch: 12 }  // الإجمالي
     ];
     
@@ -742,6 +745,28 @@ class ETAInvoiceExporter {
           right: { style: "thin", color: { rgb: "000000" } }
         }
       };
+    }
+    
+    // Add alternating row colors for data rows (starting from row 9)
+    for (let row = 8; row <= range.e.r - 2; row++) { // Exclude totals and back link rows
+      const isEvenRow = (row - 8) % 2 === 0;
+      const fillColor = isEvenRow ? "F8F9FA" : "FFFFFF";
+      
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+        if (!ws[cellAddress]) continue;
+        
+        if (!ws[cellAddress].s) ws[cellAddress].s = {};
+        
+        ws[cellAddress].s.fill = { fgColor: { rgb: fillColor } };
+        ws[cellAddress].s.alignment = { horizontal: "center", vertical: "center" };
+        ws[cellAddress].s.border = {
+          top: { style: "thin", color: { rgb: "E0E0E0" } },
+          bottom: { style: "thin", color: { rgb: "E0E0E0" } },
+          left: { style: "thin", color: { rgb: "E0E0E0" } },
+          right: { style: "thin", color: { rgb: "E0E0E0" } }
+        };
+      }
     }
   }
   

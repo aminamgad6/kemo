@@ -381,30 +381,55 @@ class ETAContentScript {
       
       if (this.totalPages <= 1) {
         // Only one page, return current data
+        this.allPagesData = [...this.invoiceData];
         return {
           success: true,
-          data: this.invoiceData,
-          totalProcessed: this.invoiceData.length
+          data: this.allPagesData,
+          totalProcessed: this.allPagesData.length
         };
       }
       
-      // Start from page 1
-      await this.navigateToPage(1);
+      // Add current page data first
+      this.allPagesData.push(...this.invoiceData);
+      console.log(`ETA Exporter: Added current page ${this.currentPage} data: ${this.invoiceData.length} invoices`);
       
-      // Process all pages with improved performance
+      // Process remaining pages
       for (let page = 1; page <= this.totalPages; page++) {
+        // Skip current page as we already have its data
+        if (page === this.currentPage) {
+          continue;
+        }
+        
         try {
           // Update progress
           if (this.progressCallback) {
             this.progressCallback({
               currentPage: page,
               totalPages: this.totalPages,
-              message: `جاري معالجة الصفحة ${page} من ${this.totalPages}...`
+              message: `جاري الانتقال للصفحة ${page} من ${this.totalPages}...`
             });
           }
           
-          // Wait for page to load using DOM readiness checks
+          // Navigate to the page
+          const navigated = await this.navigateToPage(page);
+          if (!navigated) {
+            console.warn(`Failed to navigate to page ${page}`);
+            continue;
+          }
+          
+          // Wait for page to load
           await this.waitForPageLoadOptimized();
+          
+          // Update progress
+          if (this.progressCallback) {
+            this.progressCallback({
+              currentPage: page,
+              totalPages: this.totalPages,
+              message: `جاري استخراج بيانات الصفحة ${page}...`
+            });
+          }
+          
+          // Scan for invoices on this page
           this.scanForInvoices();
           
           // Add current page data to all pages data
@@ -412,11 +437,8 @@ class ETAContentScript {
           
           console.log(`ETA Exporter: Processed page ${page}, collected ${this.invoiceData.length} invoices`);
           
-          // Navigate to next page if not the last page
-          if (page < this.totalPages) {
-            await this.navigateToNextPage();
-            await this.delay(800); // Reduced wait time
-          }
+          // Small delay before next page
+          await this.delay(500);
           
         } catch (error) {
           console.error(`Error processing page ${page}:`, error);
@@ -444,6 +466,11 @@ class ETAContentScript {
   
   async navigateToPage(pageNumber) {
     try {
+      // If we're already on the target page, no need to navigate
+      if (this.currentPage === pageNumber) {
+        return true;
+      }
+      
       // Look for page number button using exact selector from HTML
       const pageButtons = document.querySelectorAll('.eta-pageNumber');
       
@@ -451,8 +478,61 @@ class ETAContentScript {
       for (const btn of pageButtons) {
         const label = btn.querySelector('.ms-Button-label');
         if (label && parseInt(label.textContent) === pageNumber) {
+          console.log(`Navigating to page ${pageNumber}`);
           btn.click();
           await this.waitForPageLoadOptimized();
+          
+          // Verify we're on the correct page
+          this.extractPaginationInfo();
+          if (this.currentPage === pageNumber) {
+            console.log(`Successfully navigated to page ${pageNumber}`);
+            return true;
+          }
+        }
+      }
+      
+      // Try alternative navigation method using next/previous buttons
+      if (pageNumber > this.currentPage) {
+        // Navigate forward
+        for (let i = this.currentPage; i < pageNumber; i++) {
+          const success = await this.navigateToNextPage();
+          if (!success) break;
+          await this.waitForPageLoadOptimized();
+          this.extractPaginationInfo();
+        }
+      } else if (pageNumber < this.currentPage) {
+        // Navigate backward
+        for (let i = this.currentPage; i > pageNumber; i--) {
+          const success = await this.navigateToPreviousPage();
+          if (!success) break;
+          await this.waitForPageLoadOptimized();
+          this.extractPaginationInfo();
+        }
+      }
+      
+      return this.currentPage === pageNumber;
+    } catch (error) {
+      console.error(`Error navigating to page ${pageNumber}:`, error);
+      return false;
+    }
+  }
+  
+  async navigateToPreviousPage() {
+    try {
+      // Look for previous page button
+      const prevButton = document.querySelector('[data-icon-name="ChevronLeft"]')?.closest('button');
+      
+      if (prevButton && !prevButton.disabled && !prevButton.classList.contains('is-disabled')) {
+        prevButton.click();
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error navigating to previous page:', error);
+      return false;
+    }
+  }
           return true;
         }
       }
@@ -576,22 +656,21 @@ class ETAContentScript {
         rows.forEach((row, index) => {
           const cells = row.querySelectorAll('.ms-DetailsRow-cell');
           
-          if (cells.length >= 10) { // Based on the 10 columns shown in the image
+          if (cells.length >= 9) { // Based on the 9 columns in the new layout
             const item = {
-              itemCode: this.extractCellText(cells[0]) || '', // كود الصنف
-              codeName: this.extractCellText(cells[1]) || '', // إسم الكود
-              description: this.extractCellText(cells[2]) || '', // الوصف
-              quantity: this.extractCellText(cells[3]) || '1', // الكمية
-              unitCode: this.extractCellText(cells[4]) || 'EA', // كود الوحدة
-              unitName: this.extractCellText(cells[5]) || 'قطعة', // إسم الوحدة
-              unitPrice: this.extractCellText(cells[6]) || '0', // السعر
-              totalValue: this.extractCellText(cells[7]) || '0', // القيمة
-              vatAmount: this.extractCellText(cells[8]) || '0', // ضريبة القيمة المضافة
-              totalWithVat: this.extractCellText(cells[9]) || '0' // الإجمالي
+              description: this.extractCellText(cells[0]) || '',    // A - اسم الصنف
+              unitCode: this.extractCellText(cells[1]) || 'EA',     // B - كود الوحدة
+              unitName: this.extractCellText(cells[2]) || 'قطعة',   // C - اسم الوحدة
+              quantity: this.extractCellText(cells[3]) || '1',      // D - الكمية
+              unitPrice: this.extractCellText(cells[4]) || '0',     // E - السعر
+              totalValue: this.extractCellText(cells[5]) || '0',    // F - القيمة
+              taxAmount: this.extractCellText(cells[6]) || '0',     // G - الضريبة
+              vatAmount: this.extractCellText(cells[7]) || '0',     // H - ضريبة القيمة المضافة
+              totalWithVat: this.extractCellText(cells[8]) || '0'   // I - الإجمالي
             };
             
             // Only add valid items (skip header rows)
-            if (item.description && item.description !== 'الوصف') {
+            if (item.description && item.description !== 'اسم الصنف' && item.description.trim() !== '') {
               details.push(item);
             }
           }
@@ -603,14 +682,13 @@ class ETAContentScript {
         const invoice = this.invoiceData.find(inv => inv.electronicNumber === invoiceId);
         if (invoice) {
           details.push({
-            itemCode: 'SUMMARY',
-            codeName: 'إجمالي',
             description: 'إجمالي الفاتورة',
-            quantity: '1',
             unitCode: 'EA',
             unitName: 'قطعة',
+            quantity: '1',
             unitPrice: invoice.totalAmount || '0',
             totalValue: invoice.invoiceValue || invoice.totalAmount || '0',
+            taxAmount: '0',
             vatAmount: invoice.vatAmount || '0',
             totalWithVat: invoice.totalAmount || '0'
           });
